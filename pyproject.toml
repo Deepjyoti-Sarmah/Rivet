@@ -1,0 +1,13 @@
+[project]
+name = "rivet"
+version = "0.1.0"
+description = "A tiny realtime AI orchestration runtime built from first principles"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
