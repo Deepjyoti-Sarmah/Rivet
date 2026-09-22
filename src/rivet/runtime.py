@@ -8,10 +8,14 @@ class ProcessorRuntine:
     def __init__(
         self,
         processor: Processor,
+        output_queue: asyncio.Queue[Frame] | None = None,
         max_queue_size: int = 100,
     ) -> None:
         self.processor = processor
-        self.queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=max_queue_size)
+
+        self.input_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=max_queue_size)
+
+        self.output_queue = output_queue
 
         self.task: asyncio.Task | None = None
 
@@ -20,15 +24,25 @@ class ProcessorRuntine:
 
     async def _run(self) -> None:
         while True:
-            frame = await self.queue.get()
+            frame = await self.input_queue.get()
 
             try:
                 output_frames = await self.processor.process(frame=frame)
 
-                for output in output_frames:
-                    print(f"{self.processor.__class__.__name__}produced {output}")
+                if self.output_queue is not None:
+                    for output in output_frames:
+                        await self.output_queue.put(output)
             finally:
-                self.queue.task_done()
+                self.input_queue.task_done()
 
     async def push(self, frame: Frame) -> None:
-        await self.queue.put(frame)
+        await self.input_queue.put(frame)
+
+    async def stop(self) -> None:
+        if self.task is not None:
+            self.task.cancel()
+
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
