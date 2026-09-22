@@ -1,17 +1,9 @@
-import asyncio
-
 from rivet.frames import Frame, TextFrame
 from rivet.processor import Processor
 
 
-class SlowProcessor(Processor):
+class UppercaseProcessor(Processor):
     async def process(self, frame: Frame) -> list[Frame]:
-        print("SlowProcessor: started")
-
-        await asyncio.sleep(2)
-
-        print("SlowProcessor: finished")
-
         if isinstance(frame, TextFrame):
             return [TextFrame(frame.text.upper())]
 
