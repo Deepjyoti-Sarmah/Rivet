@@ -1,18 +1,20 @@
 import asyncio
+import time
 
-from rivet.frames import Frame, TextFrame
+from rivet.frames import Frame
 from rivet.processor import Processor
 
 
 class SlowProcessor(Processor):
     async def process(self, frame: Frame) -> list[Frame]:
-        print("SlowProcessor: started")
+        start = time.perf_counter()
 
-        await asyncio.sleep(2)
+        print(f"START {frame}")
 
-        print("SlowProcessor: finished")
+        await asyncio.sleep(1)
 
-        if isinstance(frame, TextFrame):
-            return [TextFrame(frame.text.upper())]
+        elapsed = time.perf_counter() - start
+
+        print(f"END {frame} ({elapsed:.3f}s)")
 
         return [frame]

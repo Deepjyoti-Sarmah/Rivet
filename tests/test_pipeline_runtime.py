@@ -8,7 +8,12 @@ from rivet.processors.uppercase import UppercaseProcessor
 
 @pytest.mark.asyncio
 async def test_pipeline_runtime():
-    pipeline = Pipeline([UppercaseProcessor(), ExclamationProcessor()])
+    pipeline = Pipeline(
+        [
+            UppercaseProcessor(),
+            ExclamationProcessor(),
+        ]
+    )
 
     await pipeline.start()
 
