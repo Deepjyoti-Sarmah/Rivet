@@ -1,3 +1,5 @@
+from typing import Any
+
 import pytest
 
 from rivet.frames import Frame, TextFrame
@@ -30,7 +32,7 @@ async def test_pipeline():
         ]
     )
 
-    result = await pipeline.push(TextFrame("hello"))
+    result: Any = await pipeline.push(TextFrame("hello"))
 
     assert len(result) == 1
     assert result[0].text == "HELLO!"
