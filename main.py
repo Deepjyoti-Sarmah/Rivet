@@ -1,6 +1,21 @@
-def main():
-    print("Hello from rivet!")
+import asyncio
+
+from src.rivet.frames import TextFrame
+from src.rivet.pipeline import Pipeline
+from src.rivet.processors.debug import DebugProcessor
+
+
+async def main():
+    pipeline = Pipeline(
+        [
+            DebugProcessor(),
+        ]
+    )
+
+    result = await pipeline.push(TextFrame("hello rivet"))
+
+    print("Output:", result)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
