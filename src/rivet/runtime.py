@@ -1,7 +1,15 @@
 import asyncio
+from enum import Enum
 
 from rivet.frames import Frame
 from rivet.processor import Processor
+
+
+class RuntimeState(Enum):
+    CREATED = "created"
+    RUNNING = "running"
+    DRAINING = "draining"
+    STOPPED = "stopped"
 
 
 class ProcessorRuntime:
@@ -12,6 +20,7 @@ class ProcessorRuntime:
         max_queue_size: int = 100,
     ) -> None:
         self.processor = processor
+        self.state = RuntimeState.CREATED
 
         self.input_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=max_queue_size)
 
@@ -24,6 +33,10 @@ class ProcessorRuntime:
         self.task: asyncio.Task | None = None
 
     async def start(self) -> None:
+        if self.state != RuntimeState.CREATED:
+            raise RuntimeError(f"Cannot start runtime from state {self.state}")
+
+        self.state = RuntimeState.RUNNING
         self.task = asyncio.create_task(self._run())
 
     async def _run(self) -> None:
@@ -40,9 +53,17 @@ class ProcessorRuntime:
                 self.input_queue.task_done()
 
     async def push(self, frame: Frame) -> None:
+        if self.state != RuntimeState.RUNNING:
+            raise RuntimeError(f"Cannot push frame while runtime is {self.state}")
+
         await self.input_queue.put(frame)
 
     async def stop(self) -> None:
+        if self.state == RuntimeState.STOPPED:
+            return
+
+        self.state = RuntimeState.STOPPED
+
         if self.task is not None:
             self.task.cancel()
 
@@ -50,3 +71,21 @@ class ProcessorRuntime:
                 await self.task
             except asyncio.CancelledError:
                 pass
+
+    async def drain(self) -> None:
+        if self.state != RuntimeState.RUNNING:
+            return
+
+        self.state = RuntimeState.DRAINING
+
+        await self.input_queue.join()
+
+        if self.task is not None:
+            self.task.cancel()
+
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        self.state = RuntimeState.STOPPED
