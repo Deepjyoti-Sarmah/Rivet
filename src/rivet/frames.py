@@ -44,7 +44,7 @@ class LLMTokenFrame(Frame):
 
 
 @dataclass(slots=True)
-class InturuptFrame(Frame):
+class InterruptFrame(Frame):
     reason: str
 
     def __post_init__(self) -> None:
@@ -65,9 +65,5 @@ class AudioFrame(Frame):
     sample_rate: int
     channels: int
 
-    # breakpoint()
-
-    def __post_init__(
-        self,
-    ) -> None:
+    def __post_init__(self) -> None:
         self.type = FrameType.AUDIO

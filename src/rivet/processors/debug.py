@@ -1,5 +1,5 @@
-from src.rivet.frames import Frame
-from src.rivet.processor import Processor
+from rivet.frames import Frame
+from rivet.processor import Processor
 
 
 class DebugProcessor(Processor):
