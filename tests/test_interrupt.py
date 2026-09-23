@@ -43,3 +43,46 @@ async def test_interrupt_cancels_current_frame():
     await runtime.interrupt()
 
     assert processor.cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_interrupt_keeps_runtime_running():
+    processor = BlockingProcessor()
+
+    runtime = ProcessorRuntime(processor)
+
+    await runtime.start()
+
+    await runtime.push(TextFrame("hello"))
+
+    await processor.started.wait()
+
+    await runtime.interrupt()
+
+    assert runtime.state.value == "running"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_clears_queued_frames():
+    processor = BlockingProcessor()
+
+    runtime = ProcessorRuntime(
+        processor,
+        max_queue_size=10,
+    )
+
+    await runtime.start()
+
+    await runtime.push(TextFrame("A"))
+
+    # Make sure A is currently being processed.
+    await processor.started.wait()
+
+    # These should remain queued.
+    await runtime.push(TextFrame("B"))
+    await runtime.push(TextFrame("C"))
+    await runtime.push(TextFrame("D"))
+
+    await runtime.interrupt()
+
+    assert runtime.input_queue.empty()

@@ -89,3 +89,26 @@ class ProcessorRuntime:
                 pass
 
         self.state = RuntimeState.STOPPED
+
+    async def interrupt(self) -> None:
+        if self.state != RuntimeState.RUNNING:
+            return
+
+        # Cancel the current worker
+        if self.task is not None:
+            self.task.cancel()
+
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+
+        # Remove frames waiting in the queue
+        while not self.input_queue.empty():
+            try:
+                self.input_queue.get_nowait()
+                self.input_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+        self.task = asyncio.create_task(self._run())
