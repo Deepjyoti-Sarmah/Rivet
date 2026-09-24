@@ -81,9 +81,14 @@ many (`[a, b, c]`, expand).
 ### Lifecycle
 
 ```python
-await pipeline.stop()       # cancel now, pipeline ends
-await pipeline.interrupt()  # discard current + queued work, pipeline stays alive
+await pipeline.stop()               # cancel now, pipeline ends
+await pipeline.drain(timeout=5)     # finish queued work, then end
+await pipeline.interrupt()          # discard work, pipeline stays alive
 ```
+
+`drain()` returns `True` if every stage emptied, `False` if the timeout elapsed
+and work was dropped — shutdown finishing and shutdown giving up are different
+facts.
 
 `interrupt()` is the barge-in verb: keep the machine, drop the work.
 
@@ -95,10 +100,10 @@ the new turn survives cleanup meant for the old one.
 
 ## Status
 
-Phases 1–7 and 9 are implemented: frames, async processor runtimes, bounded
-queues and backpressure, lifecycle (`drain` vs `stop`), cancellation,
-interruption, cancellation propagation across a chain, and generation ids that
-tell stale work from new.
+Phases 1–9 are implemented: frames, async processor runtimes, bounded queues and
+backpressure, lifecycle with bounded draining, cancellation, interruption,
+cancellation propagation across a chain, and generation ids that tell stale work
+from new.
 
 | # | Phase | |
 | --- | --- | --- |
@@ -109,8 +114,8 @@ tell stale work from new.
 | 5 | Cancellation | ✅ |
 | 6 | Interruption | ✅ |
 | 7 | Cancellation propagation | ✅ |
+| 8 | Structured pipeline lifecycle | ✅ |
 | 9 | Frame metadata (generation ids) | ✅ |
-| 8 | Structured pipeline lifecycle | ⬜ |
 | 10 | Streaming abstractions | ⬜ |
 | 11 | Frame routing | ⬜ |
 | 12 | Context / state | ⬜ |

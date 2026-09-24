@@ -165,9 +165,9 @@ except asyncio.CancelledError:
 | 5 | Cancellation | ✅ DONE |
 | 6 | Interruption (single stage) | ✅ DONE |
 | 7 | Cancellation propagation | ✅ DONE |
-| 8 | **Structured pipeline lifecycle** | 🔨 **NEXT** |
+| 8 | Structured pipeline lifecycle | ✅ DONE |
 | 9 | Frame metadata (generation / turn ids) | ✅ DONE |
-| 10 | Streaming abstractions (`AsyncIterator[Frame]`) | ⬜ PLANNED |
+| 10 | **Streaming abstractions** (`AsyncIterator[Frame]`) | 🔨 **NEXT** |
 | 11 | Frame routing (fan-out, fan-in, suppression) | ⬜ PLANNED |
 | 12 | Context / state | ⬜ PLANNED |
 | 13 | Error model | ⬜ PLANNED |
@@ -192,7 +192,7 @@ Follow this order. Do not jump ahead to the more interesting later phases.
 **Build log:** [`docs/README.md`](docs/README.md) — one document per completed
 phase, each recording why the problem exists, what we built, and what still fails.
 
-**Last completed:** [`docs/phase-09-frame-metadata.md`](docs/phase-09-frame-metadata.md)
+**Last completed:** [`docs/phase-08-structured-lifecycle.md`](docs/phase-08-structured-lifecycle.md)
 **Cross-cutting reference:** [`docs/cancellation.md`](docs/cancellation.md)
 
 ### Resolved (Phase 7 → 9)
