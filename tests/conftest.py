@@ -40,6 +40,34 @@ class BlockingProcessor(Processor):
         return [frame]
 
 
+class GatedProcessor(Processor):
+    """Holds each frame until the gate is opened. No sleeps, no timing luck."""
+
+    def __init__(self, name: str = "gated") -> None:
+        self.name = name
+        self.gate = asyncio.Event()
+        self.started = asyncio.Event()
+        self.seen: list[Frame] = []
+
+    async def process(self, frame: Frame) -> list[Frame]:
+        self.seen.append(frame)
+        self.started.set()
+        await self.gate.wait()
+        return [frame]
+
+
+class ExplodingProcessor(Processor):
+    """Raises on every frame."""
+
+    def __init__(self, name: str = "boom") -> None:
+        self.name = name
+        self.started = asyncio.Event()
+
+    async def process(self, frame: Frame) -> list[Frame]:
+        self.started.set()
+        raise ValueError("processor exploded")
+
+
 class SlowCancelProcessor(Processor):
     """Stalls inside its CancelledError handler, holding the sweep open."""
 

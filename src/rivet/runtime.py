@@ -9,6 +9,7 @@ class RuntimeState(Enum):
     CREATED = "created"
     RUNNING = "running"
     DRAINING = "draining"
+    STOPPING = "stopping"
     STOPPED = "stopped"
     FAILED = "failed"
 
@@ -142,25 +143,49 @@ class ProcessorRuntime:
             if self.state in (RuntimeState.STOPPED, RuntimeState.FAILED):
                 return
 
-            self.state = RuntimeState.STOPPED
+            # STOPPING, not STOPPED: the worker is still unwinding, and a state
+            # name has to be true for the whole time it is set.
+            self.state = RuntimeState.STOPPING
             await self._cancel_worker()
+            self.state = RuntimeState.STOPPED
 
-    async def drain(self) -> None:
+    async def drain(self, timeout: float | None = None) -> bool:
+        """Finish queued work, then stop.
+
+        Returns True if the queue emptied, False if `timeout` elapsed first and
+        the runtime was force-stopped with work still outstanding.
+        """
         async with self._lifecycle_lock:
             if self.state != RuntimeState.RUNNING:
-                return
+                return False
 
+            # Close the entrance before waiting for the room to empty: push()
+            # raises from here, so a busy producer cannot keep join() from ever
+            # returning.
             self.state = RuntimeState.DRAINING
 
-        # Released while waiting so a concurrent stop() can still get in
-        await self.input_queue.join()
+        drained = True
+
+        # Lock released across the wait. Holding it here would let a hung
+        # processor block the stop() that is supposed to rescue us.
+        try:
+            if timeout is None:
+                await self.input_queue.join()
+            else:
+                await asyncio.wait_for(self.input_queue.join(), timeout=timeout)
+        except TimeoutError:
+            drained = False
 
         async with self._lifecycle_lock:
             if self.state != RuntimeState.DRAINING:
-                return
+                # A concurrent stop() got here first and owns the shutdown.
+                return drained
 
+            self.state = RuntimeState.STOPPING
             await self._cancel_worker()
             self.state = RuntimeState.STOPPED
+
+        return drained
 
     async def interrupt(self) -> int:
         async with self._lifecycle_lock:

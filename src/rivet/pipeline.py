@@ -20,10 +20,9 @@ class Pipeline:
 
         self.output_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=max_queue_size)
 
-        self._interrupt_lock = asyncio.Lock()
-
         self.generation = Generation()
         self._interrupt_lock = asyncio.Lock()
+        self._shutdown_lock = asyncio.Lock()
 
         self._build()
 
@@ -88,6 +87,25 @@ class Pipeline:
 
         return dropped
 
+    async def drain(self, timeout: float | None = None) -> bool:
+        """Finish queued work in every stage, then stop.
+
+        Swept source -> sink so each stage has finished feeding the next before
+        that one is drained. Returns True only if every stage emptied; a False
+        anywhere means work was dropped.
+
+        `timeout` is per stage, so worst-case total is timeout * len(runtimes).
+        """
+        async with self._shutdown_lock:
+            drained = True
+
+            for runtime in self.runtimes:
+                if not await runtime.drain(timeout=timeout):
+                    drained = False
+
+            return drained
+
     async def stop(self) -> None:
-        for runtime in self.runtimes:
-            await runtime.stop()
+        async with self._shutdown_lock:
+            for runtime in self.runtimes:
+                await runtime.stop()
