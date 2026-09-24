@@ -166,7 +166,7 @@ except asyncio.CancelledError:
 | 6 | Interruption (single stage) | ✅ DONE |
 | 7 | Cancellation propagation | ✅ DONE |
 | 8 | **Structured pipeline lifecycle** | 🔨 **NEXT** |
-| 9 | Frame metadata (generation / turn ids) | ⬜ PLANNED |
+| 9 | Frame metadata (generation / turn ids) | ✅ DONE |
 | 10 | Streaming abstractions (`AsyncIterator[Frame]`) | ⬜ PLANNED |
 | 11 | Frame routing (fan-out, fan-in, suppression) | ⬜ PLANNED |
 | 12 | Context / state | ⬜ PLANNED |
@@ -192,15 +192,17 @@ Follow this order. Do not jump ahead to the more interesting later phases.
 **Build log:** [`docs/README.md`](docs/README.md) — one document per completed
 phase, each recording why the problem exists, what we built, and what still fails.
 
-**Last completed:** [`docs/phase-07-cancellation-propagation.md`](docs/phase-07-cancellation-propagation.md)
+**Last completed:** [`docs/phase-09-frame-metadata.md`](docs/phase-09-frame-metadata.md)
 **Cross-cutting reference:** [`docs/cancellation.md`](docs/cancellation.md)
 
-### Known design tension (Phase 7 → 9)
+### Resolved (Phase 7 → 9)
 
-Structural cancellation propagation cannot distinguish a *new* turn's frame from
-stale work under a race. Generation/turn ids on frames dissolve this. Phase 7
-ships a deliberately-failing `xfail(strict=True)` test that pins the race down, so
-Phase 9 is *derived* rather than asserted.
+Structural cancellation propagation could not distinguish a *new* turn's frame
+from stale work under a race. Phase 7 shipped a deliberately-failing
+`xfail(strict=True)` test pinning it down; Phase 9 closed it by stamping frames
+with a generation id, and the marker came off. A narrower window remains —
+`_cancel_worker()` cancels by task rather than by label. See
+[`docs/cancellation.md`](docs/cancellation.md).
 
 ---
 

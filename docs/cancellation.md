@@ -291,11 +291,11 @@ lose the ordering guarantee that one worker per stage buys for free.
 
 ---
 
-## The open problem → Phase 9
+## The problem Phase 9 solved
 
-The sweep decides what is stale **by timing**: anything in an inbox when cleanup
-runs is assumed old. That assumption is wrong for anything that arrived a moment
-ago.
+Up to Phase 7 the sweep decided what was stale **by timing**: anything in an inbox
+when cleanup ran was assumed old. That assumption is wrong for anything that
+arrived a moment ago.
 
 ```
 sweep:   cancel A ──────────── flush A's inbox
@@ -323,7 +323,7 @@ TextFrame("...")   Tokyo?
 **nothing on the frame says which turn it belongs to.** The information required
 does not exist.
 
-Phase 9 adds it:
+[Phase 9](phase-09-frame-metadata.md) added it:
 
 ```
 "Paris"  →  generation 10
@@ -338,5 +338,28 @@ Timing and ordering stop mattering, because the answer is written on the frame.
 
 > **cancel-by-timing → invalidate-by-label**
 
-Pinned by `test_new_turn_frame_survives_interrupt_sweep`, marked
-`xfail(strict=True)` so the suite fails loudly the day Phase 9 makes it pass.
+`Pipeline` bumps the counter **before** sweeping, so everything already in the
+system is stale by definition and anything pushed afterwards carries the new
+number. Flushing became a filter — drain, keep the current, re-queue in order —
+rather than an unconditional delete.
+
+### What remains
+
+The window is narrowed, not closed. `_cancel_worker()` cancels by **task**, not by
+label:
+
+```
+bump ──▶ cancel worker ──▶ flush
+              │
+        worker dequeues a CURRENT frame here
+              │
+        cancelled anyway
+```
+
+It needs the worker to go idle at exactly that instant, so it is far narrower than
+the Phase 7 race — but real. Closing it means checking the in-flight frame's
+generation before cancelling, or re-queueing it if current. Not built: no test
+demonstrates it yet.
+
+Also: a consumer that has already read a stale frame via `get_output()` is not
+protected. Flushing reaches queues, not readers.

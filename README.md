@@ -44,8 +44,8 @@ uv run python -m rivet.main
 ```
 
 ```
-[DEBUG] TextFrame(type=<FrameType.TEXT: 'text'>, text='hello rivet')
-Output: TextFrame(type=<FrameType.TEXT: 'text'>, text='HELLO RIVET!')
+[DEBUG] TextFrame(type=<FrameType.TEXT: 'text'>, generation=0, text='hello rivet')
+Output: TextFrame(type=<FrameType.TEXT: 'text'>, generation=0, text='HELLO RIVET!')
 ```
 
 ### Building a pipeline
@@ -87,13 +87,18 @@ await pipeline.interrupt()  # discard current + queued work, pipeline stays aliv
 
 `interrupt()` is the barge-in verb: keep the machine, drop the work.
 
+Frames carry a `generation` — the turn they belong to. `push()` stamps it,
+`interrupt()` bumps it, and anything older is discarded. That is how a frame from
+the new turn survives cleanup meant for the old one.
+
 ---
 
 ## Status
 
-Phases 1–7 are implemented: frames, async processor runtimes, bounded queues and
-backpressure, lifecycle (`drain` vs `stop`), cancellation, interruption, and
-cancellation propagation across a chain.
+Phases 1–7 and 9 are implemented: frames, async processor runtimes, bounded
+queues and backpressure, lifecycle (`drain` vs `stop`), cancellation,
+interruption, cancellation propagation across a chain, and generation ids that
+tell stale work from new.
 
 | # | Phase | |
 | --- | --- | --- |
@@ -104,8 +109,8 @@ cancellation propagation across a chain.
 | 5 | Cancellation | ✅ |
 | 6 | Interruption | ✅ |
 | 7 | Cancellation propagation | ✅ |
+| 9 | Frame metadata (generation ids) | ✅ |
 | 8 | Structured pipeline lifecycle | ⬜ |
-| 9 | Frame metadata (generation ids) | ⬜ |
 | 10 | Streaming abstractions | ⬜ |
 | 11 | Frame routing | ⬜ |
 | 12 | Context / state | ⬜ |
@@ -123,10 +128,10 @@ Full roadmap in [`AGENTS.md`](AGENTS.md).
 
 ### Known limitation
 
-The interrupt sweep decides what is stale by **timing**, so a frame arriving
-during the sweep can be deleted along with the work it was meant to replace. The
-race is pinned by an `xfail(strict=True)` test and closed in Phase 9 by stamping
-frames with a generation id. See [`docs/cancellation.md`](docs/cancellation.md).
+`Pipeline.interrupt()` cancels each stage's worker by **task**, not by generation,
+so a worker that dequeues a current-turn frame in the instant before cancellation
+lands loses it. Far narrower than the pre-Phase-9 race, but real and untested.
+See [`docs/cancellation.md`](docs/cancellation.md).
 
 ---
 
