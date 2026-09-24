@@ -16,6 +16,7 @@ class FrameType(str, Enum):
 @dataclass(slots=True)
 class Frame:
     type: FrameType = field(init=False)
+    generation: int = field(init=False, default=0)
 
 
 @dataclass(slots=True)

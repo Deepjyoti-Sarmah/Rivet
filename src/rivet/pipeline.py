@@ -4,7 +4,7 @@ import asyncio
 
 from rivet.frames import Frame
 from rivet.processor import Processor
-from rivet.runtime import ProcessorRuntime
+from rivet.runtime import Generation, ProcessorRuntime
 
 
 class Pipeline:
@@ -22,6 +22,9 @@ class Pipeline:
 
         self._interrupt_lock = asyncio.Lock()
 
+        self.generation = Generation()
+        self._interrupt_lock = asyncio.Lock()
+
         self._build()
 
     def _build(self) -> None:
@@ -32,6 +35,7 @@ class Pipeline:
                 processor=processor,
                 output_queue=next_queue,
                 max_queue_size=self.max_queue_size,
+                generation=self.generation,
             )
 
             self.runtimes.insert(0, runtime)
@@ -42,18 +46,19 @@ class Pipeline:
             await runtime.start()
 
     async def push(self, frame: Frame) -> None:
+        frame.generation = self.generation.value
         await self.runtimes[0].push(frame=frame)
 
     async def get_output(self) -> Frame:
         return await self.output_queue.get()
 
     async def interrupt(self) -> int:
-        """Discard in-flight and queued work across every stage.
-
-        Swept source -> sink: clearing an upstream stage first stops it emitting
-        fresh stale frames into stages already cleared.
-        """
         async with self._interrupt_lock:
+            # Bump first: every frame already in the system is now stale by
+            # definition, and anything pushed from here carries the new number
+            # and survives the sweep.
+            self.generation.bump()
+
             dropped = 0
 
             for runtime in self.runtimes:
@@ -64,15 +69,22 @@ class Pipeline:
             return dropped
 
     def _flush_output(self) -> int:
+        kept: list[Frame] = []
         dropped = 0
 
         while not self.output_queue.empty():
             try:
-                self.output_queue.get_nowait()
+                frame = self.output_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
 
-            dropped += 1
+            if frame.generation < self.generation.value:
+                dropped += 1
+            else:
+                kept.append(frame)
+
+        for frame in kept:
+            self.output_queue.put_nowait(frame)
 
         return dropped
 

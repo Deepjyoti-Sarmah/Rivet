@@ -13,14 +13,30 @@ class RuntimeState(Enum):
     FAILED = "failed"
 
 
+class Generation:
+    """The current turn number, shared by every stage in a pipeline"""
+
+    def __init__(self) -> None:
+        self.value = 0
+
+    def bump(self) -> int:
+        self.value += 1
+        return self.value
+
+
 class ProcessorRuntime:
     def __init__(
         self,
         processor: Processor,
         output_queue: asyncio.Queue[Frame] | None = None,
         max_queue_size: int = 100,
+        generation: Generation | None = None,
     ) -> None:
         self.processor: Processor = processor
+
+        self._own_generation = generation is None
+        self.generation = generation if generation is not None else Generation()
+
         self.state = RuntimeState.CREATED
         self.error: Exception | None = None
 
@@ -50,9 +66,17 @@ class ProcessorRuntime:
             frame = await self.input_queue.get()
 
             try:
+                if frame.generation < self.generation.value:
+                    # Belongs to a turn that has been superseded
+                    continue
+
                 output_frames = await self.processor.process(frame=frame)
 
                 for output in output_frames:
+                    # Processors build fresh frames and know nothing about
+                    # turns, so thee runtime carries the stamp across
+
+                    output.generation = frame.generation
                     await self.output_queue.put(output)
 
             except asyncio.CancelledError:
@@ -92,16 +116,24 @@ class ProcessorRuntime:
 
     def _flush_input(self) -> int:
         """Discard queue frames. Returns how many were dropped."""
+        kept: list[Frame] = []
         dropped = 0
 
         while not self.input_queue.empty():
             try:
-                self.input_queue.get_nowait()
+                frame = self.input_queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
 
             self.input_queue.task_done()
-            dropped += 1
+
+            if frame.generation < self.generation.value:
+                dropped += 1
+            else:
+                kept.append(frame)
+
+        for frame in kept:
+            self.input_queue.put_nowait(frame)
 
         return dropped
 
@@ -131,21 +163,18 @@ class ProcessorRuntime:
             self.state = RuntimeState.STOPPED
 
     async def interrupt(self) -> int:
-        """Discard current and queue work, keep the runtime alive
-
-        Return the number of queued frames dropped
-        """
-
         async with self._lifecycle_lock:
-            # Re-checked under the lock: the state may have changed while we
-            # were waiting for it.
-
             if self.state != RuntimeState.RUNNING:
                 return 0
+                # Only when standalone. In a pipeline the counter is shared and
+                # Pipeline.interrupt() has already bumped it; bumping again here
+                # would advance it once per stage.
+
+            if self._own_generation:
+                self.generation.bump()
 
             await self._cancel_worker()
             dropped = self._flush_input()
             self.task = asyncio.create_task(self._run())
 
             return dropped
-            
