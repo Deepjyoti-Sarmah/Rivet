@@ -15,7 +15,9 @@ Read them in order — each phase exists because the previous one broke.
 | 4 | [Lifecycle: drain vs stop](phase-04-lifecycle.md) | ✅ |
 | 5 | [Cancellation](phase-05-cancellation.md) | ✅ |
 | 6 | [Interruption](phase-06-interruption.md) | ✅ |
-| 7 | [Cancellation propagation](phase-07-cancellation-propagation.md) | 🔨 |
+| 7 | [Cancellation propagation](phase-07-cancellation-propagation.md) | ✅ |
+
+Cross-cutting: [Cancellation, interruption, and stale work](cancellation.md).
 
 The full 28-phase roadmap lives in [`AGENTS.md`](../AGENTS.md).
 
@@ -35,6 +37,6 @@ Phase 3     What if the producer outruns the consumer?
 Phase 4     How does work stop cleanly?
 Phase 5     How does work stop *immediately*?
 Phase 6     How does one stage discard work and stay alive?
-Phase 7     How does a whole chain discard work? ← here
-Phase 9     How do you tell dead work from new work?
+Phase 7     How does a whole chain discard work?
+Phase 9     How do you tell dead work from new work? ← next
 ```
