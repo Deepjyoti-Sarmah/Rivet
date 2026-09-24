@@ -1,5 +1,7 @@
+import asyncio
+
 import pytest
-from conftest import BlockingProcessor, RecordingProcessor
+from conftest import BlockingProcessor, RecordingProcessor, SlowCancelProcessor
 
 from rivet.frames import TextFrame
 from rivet.pipeline import Pipeline
@@ -63,5 +65,43 @@ async def test_pipeline_works_after_interrupt():
     await processor_b.started.wait()
 
     assert processor_b.seen[-1].text == "new turn"
+
+    await pipeline.stop()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "A frame pushed during the sweep is deleted by cleanup meant for the "
+        "previous turn. The sweep decides what is stale by timing, and frames "
+        "carry nothing that distinguishes one turn from another. Fixed in "
+        "phase 9 by stamping frames with a generation id."
+    ),
+)
+@pytest.mark.asyncio
+async def test_new_turn_frame_survives_interrupt_sweep():
+    processor_a = SlowCancelProcessor("A")
+
+    pipeline = Pipeline([processor_a])
+    await pipeline.start()
+
+    await pipeline.push(TextFrame("old turn"))
+    await processor_a.started.wait()
+
+    # Hold the sweep open inside A's cancellation handler.
+    sweep = asyncio.create_task(pipeline.interrupt())
+    await processor_a.cancel_started.wait()
+
+    # The new turn arrives mid-sweep and lands in A's inbox, which the sweep
+    # is about to flush.
+    await pipeline.push(TextFrame("new turn"))
+
+    processor_a.release_cancel.set()
+    await sweep
+
+    processor_a.started.clear()
+    await asyncio.wait_for(processor_a.started.wait(), timeout=0.5)
+
+    assert processor_a.seen[-1].text == "new turn"
 
     await pipeline.stop()
