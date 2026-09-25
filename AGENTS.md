@@ -206,12 +206,86 @@ with a generation id, and the marker came off. A narrower window remains —
 
 ---
 
+## Spec-driven development
+
+Every phase starts with a spec, before any code:
+
+```
+docs/specs/phase-NN-name.md
+
+## Problem        what breaks today
+## Contract       signatures and semantics being added
+## Invariants     I1, I2, ...  properties that must always hold
+## Acceptance     A1, A2, ...  observable, testable criteria
+## Non-goals      what this phase deliberately does not do
+```
+
+Then: tests mapped 1:1 to acceptance criteria → watch them fail → implement.
+
+Tests reference their criterion by id. A criterion with no test is not done; a
+test with no criterion is scope creep.
+
+`docs/phase-NN-*.md` stays the retrospective half — what we learned, what broke,
+what the spec failed to anticipate.
+
+---
+
 ## Coding style
 
 Python 3.13+ · type hints · dataclasses · `Protocol` for interfaces where useful ·
 asyncio · pathlib · logging · pytest · pytest-asyncio · uv.
 
 Readable over clever. Every new dependency needs a justification.
+
+### Comments
+
+**Code explains itself through naming. Comments are a last resort.**
+
+```
+never    narrate what the code does
+only     a WHY a name cannot carry
+cap      one line
+if it needs a paragraph, it belongs in docs/
+```
+
+```python
+# bad
+# Processors build fresh frames and know nothing about turns, so the
+# runtime carries the stamp across.
+output.generation = frame.generation
+
+# good
+async def _emit(self, output: Frame, source: Frame) -> None:
+    output.generation = source.generation
+```
+
+A short docstring on a public method is fine when it states a contract the
+signature cannot — what a bool return *means*, what gets discarded. Not a
+description of the body.
+
+### Structure
+
+```
+soft cap    250 lines per file
+split by    concern, not by line count
+```
+
+One module, one job:
+
+```
+frames.py      data
+processor.py   contract
+state.py       RuntimeState, Generation
+runtime.py     ProcessorRuntime
+pipeline.py    wiring and ordering
+```
+
+Private helpers go below the public methods that use them. Public surface reads
+first.
+
+**No fake abstraction** applies to helpers too: a method that only returns a
+field, or wraps one call, is indirection rather than structure. Extract when it
+removes duplication or names a real step.
 
 Understand asyncio deeply, never as magic: coroutine vs task vs future, `await` vs
 `create_task`, what `task.cancel()` actually does (raises `CancelledError` at the

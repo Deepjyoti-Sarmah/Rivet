@@ -1,31 +1,15 @@
 import asyncio
-from enum import Enum
 
 from rivet.frames import Frame
 from rivet.processor import Processor
+from rivet.state import Generation, RuntimeState
 
-
-class RuntimeState(Enum):
-    CREATED = "created"
-    RUNNING = "running"
-    DRAINING = "draining"
-    STOPPING = "stopping"
-    STOPPED = "stopped"
-    FAILED = "failed"
-
-
-class Generation:
-    """The current turn number, shared by every stage in a pipeline"""
-
-    def __init__(self) -> None:
-        self.value = 0
-
-    def bump(self) -> int:
-        self.value += 1
-        return self.value
+TERMINAL_STATES = (RuntimeState.STOPPED, RuntimeState.FAILED)
 
 
 class ProcessorRuntime:
+    """Runs one processor continuously: queues, worker task, lifecycle."""
+
     def __init__(
         self,
         processor: Processor,
@@ -33,26 +17,18 @@ class ProcessorRuntime:
         max_queue_size: int = 100,
         generation: Generation | None = None,
     ) -> None:
-        self.processor: Processor = processor
+        self.processor = processor
 
-        self._own_generation = generation is None
-        self.generation = generation if generation is not None else Generation()
+        self._owns_generation = generation is None
+        self.generation = generation or Generation()
 
         self.state = RuntimeState.CREATED
         self.error: Exception | None = None
 
         self.input_queue: asyncio.Queue[Frame] = asyncio.Queue(maxsize=max_queue_size)
-
-        self.output_queue: asyncio.Queue[Frame] = (
-            output_queue
-            if output_queue is not None
-            else asyncio.Queue(maxsize=max_queue_size)
-        )
+        self.output_queue = output_queue or asyncio.Queue(maxsize=max_queue_size)
 
         self.task: asyncio.Task | None = None
-
-        # Serialises stop/drain/interrupt so they cannot interleave across the
-        # await points inside each other
         self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -62,46 +38,104 @@ class ProcessorRuntime:
         self.state = RuntimeState.RUNNING
         self.task = asyncio.create_task(self._run())
 
-    async def _run(self) -> None:
-        while True:
-            frame = await self.input_queue.get()
-
-            try:
-                if frame.generation < self.generation.value:
-                    # Belongs to a turn that has been superseded
-                    continue
-
-                output_frames = await self.processor.process(frame=frame)
-
-                for output in output_frames:
-                    # Processors build fresh frames and know nothing about
-                    # turns, so thee runtime carries the stamp across
-
-                    output.generation = frame.generation
-                    await self.output_queue.put(output)
-
-            except asyncio.CancelledError:
-                raise
-
-            except Exception as exc:
-                # Without this the task dies silently, the runtime keeps
-                # reporting RUNNING, and push() accepts frames nobody processes
-                self.error = exc
-                self.state = RuntimeState.FAILED
-                return
-
-            finally:
-                self.input_queue.task_done()
-
     async def push(self, frame: Frame) -> None:
         if self.state != RuntimeState.RUNNING:
             raise RuntimeError(f"Cannot push frame while runtime is {self.state}")
 
         await self.input_queue.put(frame)
 
-    async def _cancel_worker(self) -> None:
-        """Cancel the worker and wait for it to actually finish unwinding."""
+    async def stop(self) -> None:
+        async with self._lifecycle_lock:
+            if self.state in TERMINAL_STATES:
+                return
 
+            await self._shutdown()
+
+    async def drain(self, timeout: float | None = None) -> bool:
+        """Finish queued work, then stop.
+
+        Returns False if `timeout` elapsed with work still outstanding.
+        """
+        async with self._lifecycle_lock:
+            if self.state != RuntimeState.RUNNING:
+                return False
+
+            self.state = RuntimeState.DRAINING
+
+        drained = await self._wait_for_empty(timeout)
+
+        # Lock was released across the wait, so a concurrent stop() may own the
+        # shutdown by now.
+        async with self._lifecycle_lock:
+            if self.state == RuntimeState.DRAINING:
+                await self._shutdown()
+
+        return drained
+
+    async def interrupt(self) -> int:
+        """Discard current and queued work, keep the runtime alive.
+
+        Returns the number of stale frames dropped.
+        """
+        async with self._lifecycle_lock:
+            if self.state != RuntimeState.RUNNING:
+                return 0
+
+            if self._owns_generation:
+                self.generation.bump()
+
+            await self._cancel_worker()
+            dropped = self._drop_stale_input()
+            self.task = asyncio.create_task(self._run())
+
+            return dropped
+
+    async def _run(self) -> None:
+        while True:
+            frame = await self.input_queue.get()
+
+            try:
+                if self.generation.is_stale(frame.generation):
+                    continue
+
+                for output in await self.processor.process(frame=frame):
+                    await self._emit(output, source=frame)
+
+            except asyncio.CancelledError:
+                raise
+
+            except Exception as exc:
+                self._fail(exc)
+                return
+
+            finally:
+                self.input_queue.task_done()
+
+    async def _emit(self, output: Frame, source: Frame) -> None:
+        output.generation = source.generation
+        await self.output_queue.put(output)
+
+    def _fail(self, exc: Exception) -> None:
+        self.error = exc
+        self.state = RuntimeState.FAILED
+
+    async def _wait_for_empty(self, timeout: float | None) -> bool:
+        try:
+            if timeout is None:
+                await self.input_queue.join()
+            else:
+                await asyncio.wait_for(self.input_queue.join(), timeout=timeout)
+        except TimeoutError:
+            return False
+
+        return True
+
+    async def _shutdown(self) -> None:
+        self.state = RuntimeState.STOPPING
+        await self._cancel_worker()
+        self.state = RuntimeState.STOPPED
+
+    async def _cancel_worker(self) -> None:
         if self.task is None:
             return
 
@@ -110,13 +144,11 @@ class ProcessorRuntime:
         try:
             await self.task
         except asyncio.CancelledError:
-            # We requested this cancellation, so it is ours to absorb
             pass
 
         self.task = None
 
-    def _flush_input(self) -> int:
-        """Discard queue frames. Returns how many were dropped."""
+    def _drop_stale_input(self) -> int:
         kept: list[Frame] = []
         dropped = 0
 
@@ -128,7 +160,7 @@ class ProcessorRuntime:
 
             self.input_queue.task_done()
 
-            if frame.generation < self.generation.value:
+            if self.generation.is_stale(frame.generation):
                 dropped += 1
             else:
                 kept.append(frame)
@@ -137,69 +169,3 @@ class ProcessorRuntime:
             self.input_queue.put_nowait(frame)
 
         return dropped
-
-    async def stop(self) -> None:
-        async with self._lifecycle_lock:
-            if self.state in (RuntimeState.STOPPED, RuntimeState.FAILED):
-                return
-
-            # STOPPING, not STOPPED: the worker is still unwinding, and a state
-            # name has to be true for the whole time it is set.
-            self.state = RuntimeState.STOPPING
-            await self._cancel_worker()
-            self.state = RuntimeState.STOPPED
-
-    async def drain(self, timeout: float | None = None) -> bool:
-        """Finish queued work, then stop.
-
-        Returns True if the queue emptied, False if `timeout` elapsed first and
-        the runtime was force-stopped with work still outstanding.
-        """
-        async with self._lifecycle_lock:
-            if self.state != RuntimeState.RUNNING:
-                return False
-
-            # Close the entrance before waiting for the room to empty: push()
-            # raises from here, so a busy producer cannot keep join() from ever
-            # returning.
-            self.state = RuntimeState.DRAINING
-
-        drained = True
-
-        # Lock released across the wait. Holding it here would let a hung
-        # processor block the stop() that is supposed to rescue us.
-        try:
-            if timeout is None:
-                await self.input_queue.join()
-            else:
-                await asyncio.wait_for(self.input_queue.join(), timeout=timeout)
-        except TimeoutError:
-            drained = False
-
-        async with self._lifecycle_lock:
-            if self.state != RuntimeState.DRAINING:
-                # A concurrent stop() got here first and owns the shutdown.
-                return drained
-
-            self.state = RuntimeState.STOPPING
-            await self._cancel_worker()
-            self.state = RuntimeState.STOPPED
-
-        return drained
-
-    async def interrupt(self) -> int:
-        async with self._lifecycle_lock:
-            if self.state != RuntimeState.RUNNING:
-                return 0
-                # Only when standalone. In a pipeline the counter is shared and
-                # Pipeline.interrupt() has already bumped it; bumping again here
-                # would advance it once per stage.
-
-            if self._own_generation:
-                self.generation.bump()
-
-            await self._cancel_worker()
-            dropped = self._flush_input()
-            self.task = asyncio.create_task(self._run())
-
-            return dropped
