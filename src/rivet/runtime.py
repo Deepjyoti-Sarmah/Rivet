@@ -29,6 +29,7 @@ class ProcessorRuntime:
         self.output_queue = output_queue or asyncio.Queue(maxsize=max_queue_size)
 
         self.task: asyncio.Task | None = None
+        self._inflight: Frame | None = None
         self._lifecycle_lock = asyncio.Lock()
 
     async def start(self) -> None:
@@ -73,7 +74,10 @@ class ProcessorRuntime:
         return drained
 
     async def interrupt(self) -> int:
-        """Discard current and queued work, keep the runtime alive.
+        """Discard stale work, keep the runtime alive.
+
+        A worker holding a current frame is left running, so `interrupt` can
+        return while that frame is still in progress.
 
         Returns the number of stale frames dropped.
         """
@@ -84,11 +88,11 @@ class ProcessorRuntime:
             if self._owns_generation:
                 self.generation.bump()
 
-            await self._cancel_worker()
-            dropped = self._drop_stale_input()
-            self.task = asyncio.create_task(self._run())
+            if not self._holds_current_work():
+                await self._cancel_worker()
+                self.task = asyncio.create_task(self._run())
 
-            return dropped
+            return self._drop_stale_input()
 
     async def _run(self) -> None:
         while True:
@@ -97,6 +101,8 @@ class ProcessorRuntime:
             try:
                 if self.generation.is_stale(frame.generation):
                     continue
+
+                self._inflight = frame
 
                 for output in await self.processor.process(frame=frame):
                     await self._emit(output, source=frame)
@@ -109,6 +115,7 @@ class ProcessorRuntime:
                 return
 
             finally:
+                self._inflight = None
                 self.input_queue.task_done()
 
     async def _emit(self, output: Frame, source: Frame) -> None:
@@ -147,6 +154,13 @@ class ProcessorRuntime:
             pass
 
         self.task = None
+
+    def _holds_current_work(self) -> bool:
+        # A dequeued frame is invisible to the sweep, so this one has to survive.
+        if self._inflight is None:
+            return False
+
+        return not self.generation.is_stale(self._inflight.generation)
 
     def _drop_stale_input(self) -> int:
         kept: list[Frame] = []

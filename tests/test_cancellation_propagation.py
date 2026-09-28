@@ -1,7 +1,12 @@
 import asyncio
 
 import pytest
-from conftest import BlockingProcessor, RecordingProcessor, SlowCancelProcessor
+from conftest import (
+    BlockingProcessor,
+    GatedProcessor,
+    RecordingProcessor,
+    SlowCancelProcessor,
+)
 
 from rivet.frames import TextFrame
 from rivet.pipeline import Pipeline
@@ -110,5 +115,58 @@ async def test_new_turn_frame_survives_interrupt_sweep():
 
     assert processor_a.seen[-1].text == "new turn"
     assert "old queued" not in [frame.text for frame in processor_a.seen]
+
+    await pipeline.stop()
+
+
+@pytest.mark.asyncio
+async def test_current_frame_survives_await_between_bump_and_cancel(monkeypatch):
+    """A current frame in a stage's hands must not die with that stage's worker.
+
+    Pipeline.interrupt() bumps the generation, then each runtime decides whether
+    to cancel its worker. With both locks free there is no await in between, so
+    the window is installed here: the stage's interrupt parks on an Event before
+    it decides, which is exactly the await a future change would add.
+    """
+    processor = GatedProcessor("A")
+
+    pipeline = Pipeline([processor])
+    await pipeline.start()
+
+    runtime = pipeline.runtimes[0]
+
+    parked = asyncio.Event()
+    release = asyncio.Event()
+    original_interrupt = runtime.interrupt
+
+    async def parked_interrupt() -> int:
+        parked.set()
+        await release.wait()
+        return await original_interrupt()
+
+    monkeypatch.setattr(runtime, "interrupt", parked_interrupt)
+
+    sweep = asyncio.create_task(pipeline.interrupt())
+    await asyncio.wait_for(parked.wait(), timeout=1.0)
+
+    # Stamped after the bump, so this frame is current, not stale.
+    await pipeline.push(TextFrame("new turn"))
+
+    # The worker is still running: it takes the frame and parks in the gate.
+    await asyncio.wait_for(processor.started.wait(), timeout=1.0)
+
+    release.set()
+    await asyncio.wait_for(sweep, timeout=1.0)
+
+    processor.gate.set()
+
+    try:
+        frame = await asyncio.wait_for(pipeline.get_output(), timeout=1.0)
+    except TimeoutError:
+        pytest.fail("current frame was discarded by the interrupt: no output")
+
+    assert frame.text == "new turn"
+
+    assert runtime.state.value == "running"
 
     await pipeline.stop()
