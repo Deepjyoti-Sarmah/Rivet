@@ -59,6 +59,25 @@ kind in commit messages or PR descriptions. Write the message and stop.
 
 ---
 
+## Communication
+
+The user is a junior engineer returning to a cold session. Assume they remember
+nothing from the scrollback, and write for that.
+
+- **Open with a recap.** Two or three sentences: what we were doing, why, where it
+  stands now.
+- **Plain language.** No callbacks like "the fix from before" or "option B from
+  earlier". Restate the thing in place, every time.
+- **Self-contained questions.** A decision request carries its own background,
+  options, trade-offs, and recommendation. Never require scrolling back to answer.
+- **One question at a time.** When several decisions are open, say how many and
+  name them, then ask the first and wait for the answer.
+- **Anchor the work.** Name the phase, the branch, and the file when reporting.
+- **End with the next action.** Say what is waiting on the user, or say plainly
+  that nothing is.
+
+---
+
 ## Teaching contract
 
 Before implementing any major abstraction, work through:
@@ -84,6 +103,12 @@ invariant → **write tests first** → watch them fail → implement the smalle
 run tests → inspect edge cases → refactor → document what was learned.
 
 Never jump from "explain the problem" straight to "here's the implementation."
+
+### Branches
+
+Work lands on a branch per phase, never on the default branch. Phases are
+sequential: merge the phase branch before the next phase starts. Separate
+git worktrees per task are not used here — one session, one phase at a time.
 
 ---
 
@@ -152,6 +177,17 @@ except asyncio.CancelledError:
     raise          # never swallow it
 ```
 
+### Verify before claiming done
+
+"Done" means a command ran and its output is in the transcript:
+
+```sh
+uv run pytest -q
+```
+
+Never report a change as working from reading the code. When a test fails, a
+step was skipped, or a marker is still `xfail`, say so and paste the output.
+
 ---
 
 ## Roadmap
@@ -192,7 +228,7 @@ Follow this order. Do not jump ahead to the more interesting later phases.
 **Build log:** [`docs/README.md`](docs/README.md) — one document per completed
 phase, each recording why the problem exists, what we built, and what still fails.
 
-**Last completed:** [`docs/phase-08-structured-lifecycle.md`](docs/phase-08-structured-lifecycle.md)
+**Last completed:** [`docs/phase-09-frame-metadata.md`](docs/phase-09-frame-metadata.md)
 **Cross-cutting reference:** [`docs/cancellation.md`](docs/cancellation.md)
 
 ### Resolved (Phase 7 → 9)

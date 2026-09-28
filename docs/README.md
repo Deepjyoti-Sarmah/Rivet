@@ -16,8 +16,8 @@ Read them in order — each phase exists because the previous one broke.
 | 5 | [Cancellation](phase-05-cancellation.md) | ✅ |
 | 6 | [Interruption](phase-06-interruption.md) | ✅ |
 | 7 | [Cancellation propagation](phase-07-cancellation-propagation.md) | ✅ |
-| 9 | [Frame metadata (generation ids)](phase-09-frame-metadata.md) | ✅ |
 | 8 | [Structured pipeline lifecycle](phase-08-structured-lifecycle.md) | ✅ |
+| 9 | [Frame metadata (generation ids)](phase-09-frame-metadata.md) | ✅ |
 
 Cross-cutting: [Cancellation, interruption, and stale work](cancellation.md).
 
@@ -40,7 +40,7 @@ Phase 4     How does work stop cleanly?
 Phase 5     How does work stop *immediately*?
 Phase 6     How does one stage discard work and stay alive?
 Phase 7     How does a whole chain discard work?
-Phase 9     How do you tell dead work from new work?
 Phase 8     How does shutdown behave under concurrency?
+Phase 9     How do you tell dead work from new work?
 Phase 10    How does work stream instead of arriving all at once? ← next
 ```
