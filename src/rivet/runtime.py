@@ -43,6 +43,12 @@ class ProcessorRuntime:
         if self.state != RuntimeState.RUNNING:
             raise RuntimeError(f"Cannot push frame while runtime is {self.state}")
 
+        # Stamped before the put: a push blocked on a full queue is released by
+        # the sweep of the interrupt that supersedes it, and must not inherit
+        # that turn's generation.
+        if self._owns_generation:
+            frame.generation = self.generation.value
+
         await self.input_queue.put(frame)
 
     async def stop(self) -> None:

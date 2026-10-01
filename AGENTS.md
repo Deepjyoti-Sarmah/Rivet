@@ -236,8 +236,9 @@ phase, each recording why the problem exists, what we built, and what still fail
 Structural cancellation propagation could not distinguish a *new* turn's frame
 from stale work under a race. Phase 7 shipped a deliberately-failing
 `xfail(strict=True)` test pinning it down; Phase 9 closed it by stamping frames
-with a generation id, and the marker came off. A narrower window remains —
-`_cancel_worker()` cancels by task rather than by label. See
+with a generation id, and the marker came off. The cancel-window that phase left
+behind — a worker cancelled while holding a frame the sweep cannot see — is closed
+too: a worker holding a current frame is no longer cancelled. See
 [`docs/cancellation.md`](docs/cancellation.md).
 
 ---

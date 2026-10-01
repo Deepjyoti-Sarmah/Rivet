@@ -345,8 +345,7 @@ rather than an unconditional delete.
 
 ### What remains
 
-The window is narrowed, not closed. `_cancel_worker()` cancels by **task**, not by
-label:
+The window is closed. `_cancel_worker()` used to cancel by **task**, not by label:
 
 ```
 bump ──▶ cancel worker ──▶ flush
@@ -356,10 +355,24 @@ bump ──▶ cancel worker ──▶ flush
         cancelled anyway
 ```
 
-It needs the worker to go idle at exactly that instant, so it is far narrower than
-the Phase 7 race — but real. Closing it means checking the in-flight frame's
-generation before cancelling, or re-queueing it if current. Not built: no test
-demonstrates it yet.
+A dequeued frame is in neither queue, so the flush could never see it. The runtime
+now records the frame it holds and skips the cancel when that frame is current:
+
+```python
+if not self._holds_current_work():
+    await self._cancel_worker()
+```
+
+`interrupt()` therefore no longer guarantees that in-flight work stopped. A
+processor parked on a slow call outlives the call and emits after the sweep. That
+output carries the current generation, so it is not stale work, but nothing orders
+it against the turn that followed. `stop()` still cancels unconditionally.
+
+There is no natural race in the path today: between the pipeline's `bump()` and a
+runtime's cancel decision there is no `await`, so no push can land in the gap.
+Phase 10 rewrites that loop, and
+`test_current_frame_survives_await_between_bump_and_cancel` installs the missing
+`await` to keep the invariant pinned.
 
 Also: a consumer that has already read a stale frame via `get_output()` is not
 protected. Flushing reaches queues, not readers.

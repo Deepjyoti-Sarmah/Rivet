@@ -3,7 +3,9 @@
 **Status:** ✅ done
 **Code:** `src/rivet/frames.py`, `src/rivet/runtime.py`, `src/rivet/pipeline.py`
 **Tests:** `tests/test_cancellation_propagation.py`
-**Closes:** the race left open by [phase 7](phase-07-cancellation-propagation.md)
+**Closes:** the race left open by [phase 7](phase-07-cancellation-propagation.md),
+and the cancel-window and standalone-stamping holes this document left open
+afterwards
 
 ---
 
@@ -195,6 +197,28 @@ Standalone, the runtime owns its counter and bumps it. Inside a pipeline the
 counter is shared and only `Pipeline` bumps — otherwise it would advance once per
 stage, and a 3-stage sweep would jump 3 generations.
 
+Owning the counter also means owning the stamp, because `Pipeline.push` is not in
+the path at all:
+
+```python
+if self._owns_generation:
+    frame.generation = self.generation.value
+```
+
+Without it a standalone runtime breaks on its first interrupt. It owns the counter,
+so it moves the counter, and every frame it is later handed still carries the
+default `0`:
+
+```
+interrupt()          bump → value 1
+push(TextFrame(...)) generation stays 0
+_run()               is_stale(0) → 0 < 1 → skip
+```
+
+No error, no log, no work. This surfaced as a test failure rather than a report:
+`test_interrupt_keeps_runtime_running` asserted the state string and then stopped,
+so it never fed the runtime anything again.
+
 This surfaced as a test failure: `test_interrupt_clears_queued_frames` uses a bare
 `ProcessorRuntime`, where nothing was bumping, so `0 < 0` was false and nothing was
 ever stale.
@@ -214,6 +238,44 @@ TextFrame(text: str)      # no default, follows generation=0  → TypeError
 
 `init=False` excludes it from `__init__`, so the ordering rule never applies and
 `TextFrame("hello")` still works.
+
+### A frame already dequeued
+
+The sweep can only see queues. A frame a worker has pulled off one is in neither
+place, so cancelling that worker drops the frame with no trace: the `finally`
+calls `task_done()`, the queue looks empty, and `drain()` reports success.
+
+The runtime records what it is holding, and the interrupt reads that before it
+cancels anything:
+
+```python
+self._inflight = frame          # in _run, set after the stale check
+...
+if not self._holds_current_work():
+    await self._cancel_worker()
+```
+
+A current frame survives its worker. A stale one is cancelled exactly as before,
+and the sweep still discards everything queued behind it.
+
+Set after the stale check rather than before: a frame that was correctly dropped
+as stale is not in flight, and resurrecting it would undo the sweep.
+
+**There is no natural race in this path today.** Between the pipeline's `bump()`
+and a runtime's cancel decision there is no `await` — an uncontended
+`asyncio.Lock.acquire` returns without suspending, and awaiting a coroutine does
+not hand control to the loop — so no push can land a current frame in the gap.
+`test_current_frame_survives_await_between_bump_and_cancel` therefore installs the
+missing `await` itself, by parking the stage's `interrupt()` on an `Event`, and
+pins the invariant:
+
+```
+a frame stamped with the current generation
+is never discarded by an interrupt
+```
+
+Phase 10 rewrites this loop. One `await` added there is all it takes to make the
+window live, which is the reason for the test rather than a comment.
 
 ## TRADE-OFFS
 
@@ -238,26 +300,40 @@ is how a frame becomes a grab-bag.
 
 ## FAILURE MODES
 
-- **The cancel-window is narrowed, not closed.** `_cancel_worker()` cancels by
-  *task*, not by label:
+- **`interrupt()` is no longer a hard stop on current work.** Closing the window
+  traded a silent frame loss for a worker that can outlive the call:
 
   ```
-  bump ──▶ cancel worker ──▶ flush
-                │
-          worker dequeues a CURRENT frame here
-                │
-          cancelled anyway
+  interrupt() returns
+      │
+      ├── stage A: still running, mid-LLM-call   ← by design
+      └── stage B: cancelled
   ```
 
-  Much narrower than the Phase 7 race — it needs the worker idle at exactly that
-  instant — but real. Closing it means checking the in-flight frame's generation
-  before cancelling, or re-queueing it if current. Not built: no test demonstrates
-  it yet.
+  Stages are non-uniform within a single interrupt. A processor parked on a slow
+  call emits *after* the sweep, carrying the current generation, so its output is
+  not stale work — but nothing orders that output against the turn that followed
+  it. `stop()` is unaffected: `_shutdown()` cancels unconditionally.
 
 - **Partial output survives interruption.** A processor cancelled mid-emit has
   already put stale frames downstream. They now *carry* the old generation, so a
   later flush discards them — but a consumer that already read them is not
   protected. `get_output()` does not check generations.
+
+- **Two places can stamp, and one of them is easy to get wrong.**
+  `Pipeline.push` stamps because the pipeline owns the counter. A runtime that
+  owns its counter stamps in `push` as well, and it must do so *before* the put:
+
+  ```
+  push(TextFrame)  →  stamp now        ✓  turn it was pushed in
+                  →  await queue.put
+                  →  stamp later       ✗  turn the sweep that freed the slot
+  ```
+
+  A push blocked on a full queue is released by the sweep of the very interrupt
+  that supersedes it. Stamping after the wait admits the frame to the turn it was
+  pushed in front of. Two tests pin this: one that a standalone runtime still
+  works after an interrupt, one that a push which waited is not admitted.
 
 - **The counter is unbounded.** Irrelevant in practice; worth knowing it is
   monotonic with no reset.
@@ -291,3 +367,18 @@ removed.
 
 Tests written *after* a fix never get the failure check for free. Break the code
 on purpose to earn it.
+
+A third lesson, from a test that had to manufacture its own race:
+
+> **A test can only prove what its seam can reach.**
+
+The window has no `await` in it, so no schedule can enter it and the test has to
+install the missing suspension itself. Two attempts failed instructively. Parking
+inside `_cancel_worker` sat *after* the cancel decision, so it could only delay a
+cancel that had already been chosen — and the frame under test was never offered
+to the decision at all. Patching `Generation.bump` with an `async def` produced a
+coroutine that nobody awaited, because `bump()` is synchronous, and the test went
+green for a garbage reason.
+
+A test that passes when you expected it to fail is reporting on the seam before it
+reports on the code.
